@@ -1,3 +1,5 @@
+import { TouchControls } from './TouchControls.js';
+
 /**
  * InputManager - Handles keyboard and mouse input with Pointer Lock
  */
@@ -22,6 +24,10 @@ export class InputManager {
 
         // Pointer lock state
         this.pointerLocked = false;
+
+        // Touch controls for mobile
+        this.touchControls = null;
+        this.isMobile = this.detectMobile();
 
         // Bind handlers
         this.onKeyDown = this.onKeyDown.bind(this);
@@ -60,9 +66,36 @@ export class InputManager {
             weapon7: ['Digit7'],
             weapon8: ['Digit8']
         };
+
+        // Initialize touch controls for mobile
+        if (this.isMobile) {
+            this.touchControls = new TouchControls(canvas.parentElement);
+        }
+    }
+
+    detectMobile() {
+        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+               (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
+    }
+
+    enableTouchControls() {
+        if (this.touchControls) {
+            this.touchControls.enable();
+        }
+    }
+
+    disableTouchControls() {
+        if (this.touchControls) {
+            this.touchControls.disable();
+        }
     }
 
     requestPointerLock() {
+        // Skip pointer lock on mobile (use touch controls instead)
+        if (this.isMobile) {
+            this.pointerLocked = true;  // Simulate locked state for game logic
+            return;
+        }
         this.canvas.requestPointerLock();
     }
 
@@ -170,12 +203,24 @@ export class InputManager {
         this.moveInput.right = 0;
         this.moveInput.up = 0;
 
+        // Keyboard input
         if (this.isDown('forward')) this.moveInput.forward += 1;
         if (this.isDown('back')) this.moveInput.forward -= 1;
         if (this.isDown('right')) this.moveInput.right += 1;
         if (this.isDown('left')) this.moveInput.right -= 1;
         if (this.isDown('jump')) this.moveInput.up += 1;
         if (this.isDown('crouch')) this.moveInput.up -= 1; // Swim down in water
+
+        // Touch input (additive with keyboard)
+        if (this.touchControls && this.touchControls.enabled) {
+            const touchMove = this.touchControls.getMoveInput();
+            this.moveInput.forward += touchMove.forward;
+            this.moveInput.right += touchMove.right;
+
+            if (this.touchControls.isJumpPressed()) {
+                this.moveInput.up += 1;
+            }
+        }
 
         // Normalize diagonal movement
         const mag = Math.sqrt(
@@ -191,9 +236,19 @@ export class InputManager {
 
     getMouseDelta() {
         const yMultiplier = this.invertMouse ? -1 : 1;
+        let deltaX = this.mouseDelta.x;
+        let deltaY = this.mouseDelta.y;
+
+        // Add touch look delta
+        if (this.touchControls && this.touchControls.enabled) {
+            const touchDelta = this.touchControls.getLookDelta();
+            deltaX += touchDelta.x;
+            deltaY += touchDelta.y;
+        }
+
         const delta = {
-            x: this.mouseDelta.x * this.sensitivity,
-            y: this.mouseDelta.y * this.sensitivity * yMultiplier
+            x: deltaX * this.sensitivity,
+            y: deltaY * this.sensitivity * yMultiplier
         };
         return delta;
     }
@@ -207,23 +262,40 @@ export class InputManager {
     }
 
     getMoveInput() {
+        let attack = this.isDown('attack');
+        let jump = this.isDown('jump');
+
+        // Touch input
+        if (this.touchControls && this.touchControls.enabled) {
+            if (this.touchControls.isFirePressed()) attack = true;
+            if (this.touchControls.isJumpPressed()) jump = true;
+        }
+
         return {
             forward: this.moveInput.forward,
             right: this.moveInput.right,
             up: this.moveInput.up,
-            jump: this.isDown('jump'),
-            attack: this.isDown('attack'),
+            jump: jump,
+            attack: attack,
             use: this.isPressed('use'),
             alwaysRun: this.alwaysRun
         };
     }
 
     getWeaponSelect() {
+        // Keyboard weapon selection
         for (let i = 1; i <= 8; i++) {
             if (this.isPressed(`weapon${i}`)) {
                 return i;
             }
         }
+
+        // Touch weapon selection
+        if (this.touchControls && this.touchControls.enabled) {
+            const touchWeapon = this.touchControls.getWeaponSelect();
+            if (touchWeapon > 0) return touchWeapon;
+        }
+
         return 0;
     }
 
@@ -235,5 +307,10 @@ export class InputManager {
         document.removeEventListener('mouseup', this.onMouseUp);
         document.removeEventListener('pointerlockchange', this.onPointerLockChange);
         document.removeEventListener('pointerlockerror', this.onPointerLockError);
+
+        if (this.touchControls) {
+            this.touchControls.destroy();
+            this.touchControls = null;
+        }
     }
 }

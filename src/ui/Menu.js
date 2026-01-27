@@ -113,6 +113,12 @@ export class Menu {
         this.boundKeyDown = this.handleKeyDown.bind(this);
         document.addEventListener('keydown', this.boundKeyDown);
 
+        // Touch/click handling for menu items
+        this.boundPointerDown = this.handlePointerDown.bind(this);
+        this.boundPointerMove = this.handlePointerMove.bind(this);
+        this.canvas.addEventListener('pointerdown', this.boundPointerDown);
+        this.canvas.addEventListener('pointermove', this.boundPointerMove);
+
         // Start loading graphics (call init() to await completion)
         this.loadPromise = this.loadGraphics();
     }
@@ -934,6 +940,108 @@ export class Menu {
         }
     }
 
+    /**
+     * Handle pointer (touch/mouse) down on menu canvas
+     * Selects menu items when tapped/clicked
+     */
+    handlePointerDown(e) {
+        if (this.state === MENU_STATE.NONE) return;
+        if (this.gameConsole && this.gameConsole.isVisible()) return;
+
+        // Convert pointer position to menu item index
+        const menuItem = this.getMenuItemAtPosition(e.clientX, e.clientY);
+
+        if (menuItem !== -1) {
+            // Move cursor to this item and select it
+            this.cursor = menuItem;
+            this.select();
+        }
+    }
+
+    /**
+     * Handle pointer move to highlight menu items on hover
+     */
+    handlePointerMove(e) {
+        if (this.state === MENU_STATE.NONE) return;
+        if (this.gameConsole && this.gameConsole.isVisible()) return;
+
+        const menuItem = this.getMenuItemAtPosition(e.clientX, e.clientY);
+
+        if (menuItem !== -1 && menuItem !== this.cursor) {
+            this.cursor = menuItem;
+            // Don't play sound on hover to avoid spam
+        }
+    }
+
+    /**
+     * Get menu item index at screen position
+     * Returns -1 if no menu item at that position
+     */
+    getMenuItemAtPosition(clientX, clientY) {
+        // Convert screen coordinates to Quake 320x200 coordinates
+        const rect = this.canvas.getBoundingClientRect();
+        const x = (clientX - rect.left - this.offsetX) / this.scale;
+        const y = (clientY - rect.top - this.offsetY) / this.scale;
+
+        // Check if within menu bounds based on current state
+        const itemHeight = 20;  // Menu items are 20 pixels apart
+        let startY = 32;
+        let startX = 54;  // Left edge of menu items
+        let endX = 200;   // Right edge of menu items
+        let maxItems = this.getMaxItems();
+
+        // Adjust for specific menu states
+        if (this.state === MENU_STATE.OPTIONS || this.state === MENU_STATE.VIDEO_OPTIONS) {
+            startY = 32;
+            startX = 16;
+            endX = 300;
+            const itemHeightOptions = 8;
+
+            // Check if in valid X range
+            if (x < startX || x > endX) return -1;
+
+            // Calculate which item (8 pixel height for options)
+            const itemIndex = Math.floor((y - startY) / itemHeightOptions);
+            if (itemIndex >= 0 && itemIndex < maxItems) {
+                return itemIndex;
+            }
+            return -1;
+        }
+
+        if (this.state === MENU_STATE.SETUP) {
+            // Setup menu has specific Y positions: 40, 56, 80, 104, 140
+            const cursorYPositions = [40, 56, 80, 104, 140];
+            for (let i = 0; i < cursorYPositions.length; i++) {
+                if (y >= cursorYPositions[i] - 4 && y <= cursorYPositions[i] + 12) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        // Standard menus (main, single player, multiplayer)
+        // Check if in valid X range
+        if (x < startX || x > endX) return -1;
+
+        // Account for Continue option in main menu
+        let menuStartY = startY;
+        if (this.state === MENU_STATE.MAIN && this.gameInProgress) {
+            // Continue is at position 0, others shifted down
+            if (y >= startY && y < startY + itemHeight) {
+                return 0;  // Continue
+            }
+            menuStartY = startY + itemHeight;  // Regular items start after Continue
+        }
+
+        // Calculate which item
+        const itemIndex = Math.floor((y - startY) / itemHeight);
+        if (itemIndex >= 0 && itemIndex < maxItems) {
+            return itemIndex;
+        }
+
+        return -1;
+    }
+
     cursorUp() {
         this.cursor--;
         if (this.cursor < 0) {
@@ -1566,8 +1674,12 @@ export class Menu {
 
     destroy() {
         document.removeEventListener('keydown', this.boundKeyDown);
-        if (this.canvas && this.canvas.parentNode) {
-            this.canvas.parentNode.removeChild(this.canvas);
+        if (this.canvas) {
+            this.canvas.removeEventListener('pointerdown', this.boundPointerDown);
+            this.canvas.removeEventListener('pointermove', this.boundPointerMove);
+            if (this.canvas.parentNode) {
+                this.canvas.parentNode.removeChild(this.canvas);
+            }
         }
     }
 }

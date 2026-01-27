@@ -109,6 +109,20 @@
             font-size: 18px;
         }
 
+        /* Mobile detection via media queries */
+        .mobile-controls {
+            display: none;
+        }
+
+        @media (hover: none) and (pointer: coarse) {
+            .desktop-controls {
+                display: none;
+            }
+            .mobile-controls {
+                display: block;
+            }
+        }
+
         #hud {
             position: absolute;
             bottom: 0;
@@ -182,8 +196,9 @@
         </div>
 
         <div id="start-screen">
-            <h2>Click to Play</h2>
-            <p>WASD to move, Mouse to look, Space to jump</p>
+            <h2>Tap to Play</h2>
+            <p class="desktop-controls">WASD to move, Mouse to look, Space to jump</p>
+            <p class="mobile-controls">Touch controls enabled</p>
         </div>
 
         <div id="hud">

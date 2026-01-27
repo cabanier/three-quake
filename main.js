@@ -12,6 +12,11 @@ let menu = null;
 let gameConsole = null;
 let menuAnimationId = null;
 
+// Mobile detection
+const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+                 (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
+let mobileFullscreenActivated = false;
+
 // Demo loop state
 let demoList = [];         // List of available demos
 let currentDemoIndex = 0;  // Current demo in the loop
@@ -23,6 +28,38 @@ const startScreen = document.getElementById('start-screen');
 const hud = document.getElementById('hud');
 const crosshair = document.getElementById('crosshair');
 
+/**
+ * Request fullscreen and lock to landscape orientation on mobile
+ */
+async function requestMobileFullscreen() {
+    if (mobileFullscreenActivated) return;
+
+    try {
+        // Request fullscreen
+        const container = document.documentElement;
+        if (container.requestFullscreen) {
+            await container.requestFullscreen();
+        } else if (container.webkitRequestFullscreen) {
+            await container.webkitRequestFullscreen();
+        }
+
+        // Lock to landscape orientation
+        if (screen.orientation && screen.orientation.lock) {
+            try {
+                await screen.orientation.lock('landscape');
+                console.log('Orientation locked to landscape');
+            } catch (e) {
+                // Orientation lock may not be supported or allowed
+                console.log('Could not lock orientation:', e.message);
+            }
+        }
+
+        mobileFullscreenActivated = true;
+    } catch (e) {
+        console.log('Could not enter fullscreen:', e.message);
+    }
+}
+
 async function init() {
     const container = document.getElementById('game-container');
 
@@ -31,7 +68,11 @@ async function init() {
     await game.init();
 
     // Start screen click handler
-    startScreen.addEventListener('click', () => {
+    startScreen.addEventListener('click', async () => {
+        // On mobile, request fullscreen + landscape lock on first interaction
+        if (isMobile) {
+            await requestMobileFullscreen();
+        }
         startGame();
     });
 
@@ -255,6 +296,7 @@ async function loadPAKFromBuffer(arrayBuffer) {
                 // Re-add demo input listeners
                 document.addEventListener('keydown', onDemoKeyPress);
                 document.addEventListener('mousedown', onDemoKeyPress);
+                document.addEventListener('touchstart', onDemoKeyPress, { passive: false });
             }
         };
 
@@ -328,6 +370,11 @@ function startMenuLoop() {
 }
 
 async function startNewGame() {
+    // On mobile, request fullscreen
+    if (isMobile) {
+        await requestMobileFullscreen();
+    }
+
     // Stop menu animation
     if (menuAnimationId) {
         cancelAnimationFrame(menuAnimationId);
@@ -339,6 +386,7 @@ async function startNewGame() {
         demoLoopActive = false;
         document.removeEventListener('keydown', onDemoKeyPress);
         document.removeEventListener('mousedown', onDemoKeyPress);
+        document.removeEventListener('touchstart', onDemoKeyPress);
         if (game) {
             game.stopDemo();
             game.stop();
@@ -384,14 +432,32 @@ async function startNewGame() {
 }
 
 function startGame() {
-    // Request pointer lock
+    // Request pointer lock (or enable touch controls on mobile)
     game.input.requestPointerLock();
+
+    // Enable touch controls on mobile
+    if (isMobile && game.input.touchControls) {
+        game.input.enableTouchControls();
+
+        // Set up pause callback
+        game.input.touchControls.onPause = () => {
+            if (game && game.running && !game.paused) {
+                game.pause();
+                game.input.disableTouchControls();
+                menu.show();
+                startMenuLoop();
+            }
+        };
+    }
 
     // Hide start screen
     startScreen.classList.remove('visible');
 
     // Show crosshair (HUD is now graphical, rendered by HUD.js)
-    crosshair.classList.add('visible');
+    // Hide crosshair on mobile (touch controls visible instead)
+    if (!isMobile) {
+        crosshair.classList.add('visible');
+    }
 
     // Resume audio context
     game.audio.resume();
@@ -400,17 +466,32 @@ function startGame() {
     menu.gameInProgress = true;
 
     // Set up resume callback for menu
-    menu.onResume = () => {
+    menu.onResume = async () => {
+        // Re-enter fullscreen on mobile if needed
+        if (isMobile) {
+            await requestMobileFullscreen();
+        }
         menu.hide();
         game.input.requestPointerLock();
+        if (isMobile && game.input.touchControls) {
+            game.input.enableTouchControls();
+        }
+        // Resume game
+        if (game.paused) {
+            game.audio.resume();
+            game.resume();
+        }
     };
 
     // Start game loop
     game.start();
 }
 
-// Handle pointer lock changes
+// Handle pointer lock changes (desktop only)
 document.addEventListener('pointerlockchange', () => {
+    // Skip on mobile (uses touch controls, not pointer lock)
+    if (isMobile) return;
+
     if (!document.pointerLockElement && game && game.running && !game.paused) {
         // Pointer lock lost while game running - pause and show menu
         game.pause();
@@ -542,9 +623,10 @@ async function startDemoLoop() {
     demoLoopActive = true;
     currentDemoIndex = 0;
 
-    // Set up key listener to interrupt demo
+    // Set up key/touch listener to interrupt demo
     document.addEventListener('keydown', onDemoKeyPress);
     document.addEventListener('mousedown', onDemoKeyPress);
+    document.addEventListener('touchstart', onDemoKeyPress, { passive: false });
 
     // Play first demo
     await playNextDemo();
@@ -557,6 +639,7 @@ function stopDemoLoop() {
     demoLoopActive = false;
     document.removeEventListener('keydown', onDemoKeyPress);
     document.removeEventListener('mousedown', onDemoKeyPress);
+    document.removeEventListener('touchstart', onDemoKeyPress);
 
     if (game) {
         game.stopDemo();
@@ -640,10 +723,10 @@ async function playNextDemo() {
 }
 
 /**
- * Handle key/mouse press during demo - shows menu overlay while demo continues
+ * Handle key/mouse/touch during demo - shows menu overlay while demo continues
  * Like original Quake, the demo keeps playing in the background with menu on top
  */
-function onDemoKeyPress(e) {
+async function onDemoKeyPress(e) {
     // Ignore modifier keys alone
     if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta') {
         return;
@@ -656,9 +739,15 @@ function onDemoKeyPress(e) {
 
     console.log('Demo interrupted - showing menu overlay');
 
+    // On mobile, request fullscreen on first interaction
+    if (isMobile && e.type === 'touchstart') {
+        await requestMobileFullscreen();
+    }
+
     // Remove demo input listeners (menu will handle input now)
     document.removeEventListener('keydown', onDemoKeyPress);
     document.removeEventListener('mousedown', onDemoKeyPress);
+    document.removeEventListener('touchstart', onDemoKeyPress);
 
     // Show menu with transparent background (demo visible behind)
     menu.transparentBackground = true;
@@ -691,6 +780,7 @@ function startMenuOverDemoLoop() {
             if (demoLoopActive) {
                 document.addEventListener('keydown', onDemoKeyPress);
                 document.addEventListener('mousedown', onDemoKeyPress);
+                document.addEventListener('touchstart', onDemoKeyPress, { passive: false });
             }
             return;
         }
