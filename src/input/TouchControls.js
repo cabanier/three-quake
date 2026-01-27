@@ -70,7 +70,7 @@ export class TouchControls {
         // Joystick base (appears when touching)
         this.joystickBase = document.createElement('div');
         this.joystickBase.style.cssText = `
-            position: absolute;
+            position: fixed;
             width: 120px;
             height: 120px;
             border-radius: 50%;
@@ -78,6 +78,7 @@ export class TouchControls {
             border: 2px solid rgba(255, 255, 255, 0.3);
             display: none;
             transform: translate(-50%, -50%);
+            pointer-events: none;
         `;
 
         // Joystick knob
