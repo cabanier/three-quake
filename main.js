@@ -2,6 +2,7 @@ import { Game } from './src/Game.js';
 import { Menu } from './src/ui/Menu.js';
 import { Console } from './src/ui/Console.js';
 import { setConsole, Con_Printf } from './src/system/Logger.js';
+import { XRManager } from './src/input/XRManager.js';
 
 /**
  * Quake Three.js Port - Entry Point
@@ -11,6 +12,7 @@ let game = null;
 let menu = null;
 let gameConsole = null;
 let menuAnimationId = null;
+let xrManager = null;
 
 // Mobile detection
 const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
@@ -155,6 +157,63 @@ async function loadPAKFromBuffer(arrayBuffer) {
 
         // Give menu access to console
         menu.gameConsole = gameConsole;
+
+        // Initialize WebXR if supported
+        const xrSupported = await XRManager.isSupported();
+        if (xrSupported) {
+            console.log('WebXR supported, initializing VR mode...');
+            xrManager = await game.renderer.initXR(container);
+
+            // Handle VR session start - chain with existing callback
+            const originalOnSessionStart = xrManager.onSessionStart;
+            xrManager.onSessionStart = () => {
+                // Call the original callback first (this adds camera to rig, etc.)
+                if (originalOnSessionStart) {
+                    originalOnSessionStart();
+                }
+
+                console.log('VR session started (main.js)');
+                // Hide menu if visible
+                if (menu && menu.isVisible()) {
+                    menu.hide();
+                }
+                // Stop demo if playing
+                if (demoLoopActive) {
+                    demoLoopActive = false;
+                    document.removeEventListener('keydown', onDemoKeyPress);
+                    document.removeEventListener('mousedown', onDemoKeyPress);
+                    document.removeEventListener('touchstart', onDemoKeyPress);
+                    game.stopDemo();
+                }
+                // Start game if not already running
+                if (!game.running) {
+                    startNewGame();
+                }
+            };
+
+            // Handle VR session end - chain with existing callback
+            const originalOnSessionEnd = xrManager.onSessionEnd;
+            xrManager.onSessionEnd = () => {
+                // Call the original callback first (this removes camera from rig, etc.)
+                if (originalOnSessionEnd) {
+                    originalOnSessionEnd();
+                }
+
+                console.log('VR session ended (main.js)');
+                // Show menu
+                menu.show();
+                startMenuLoop();
+            };
+
+            // Handle trigger fire in VR
+            xrManager.onFire = () => {
+                if (game && game.running && game.player) {
+                    game.player.fire();
+                }
+            };
+        } else {
+            console.log('WebXR not supported');
+        }
 
         // Handle console commands
         gameConsole.onCommand = (cmd, args) => {

@@ -217,13 +217,22 @@ export class Game {
     start() {
         if (this.running) return;
 
-        this.running = true;
         this.lastFrameTime = performance.now();
-        this.gameLoop();
+        this.running = true;
+
+        // Use setAnimationLoop for WebXR compatibility
+        // This handles both VR and non-VR rendering properly
+        this.renderer.setAnimationLoop((time, frame) => {
+            this.gameLoopFrame();
+        });
     }
 
     stop() {
         this.running = false;
+        // Stop the animation loop
+        if (this.renderer) {
+            this.renderer.setAnimationLoop(null);
+        }
     }
 
     pause() {
@@ -235,7 +244,7 @@ export class Game {
         this.lastFrameTime = performance.now();
     }
 
-    gameLoop() {
+    gameLoopFrame() {
         if (!this.running) return;
 
         const now = performance.now();
@@ -276,14 +285,24 @@ export class Game {
 
         // Clear per-frame input state
         this.input.clearFrame();
+    }
 
-        // Next frame
+    // Legacy gameLoop kept for compatibility
+    gameLoop() {
+        if (!this.running) return;
+        this.gameLoopFrame();
         requestAnimationFrame(() => this.gameLoop());
     }
 
     fixedUpdate(dt) {
         this.deltaTime = dt;
         this.time += dt;
+
+        // Debug: check if physics is running in VR
+        const inVR = this.renderer && this.renderer.isInVR();
+        if (inVR && Math.random() < 0.01) {
+            console.log('fixedUpdate running in VR, player.input:', this.player?.input);
+        }
 
         // Update player input
         if (this.player) {
@@ -367,24 +386,81 @@ export class Game {
     }
 
     updatePlayerInput() {
-        if (!this.player || !this.input.pointerLocked) return;
+        // Check if we're in VR mode
+        const inVR = this.renderer && this.renderer.isInVR();
+        const xrManager = inVR ? this.renderer.getXRManager() : null;
 
-        // Get input
-        const moveInput = this.input.getMoveInput();
+        // In VR mode, we don't require pointer lock
+        if (!this.player) return;
+        if (!inVR && !this.input.pointerLocked) return;
+
+        // Get input - either from XR controllers or keyboard/mouse
+        let moveInput;
+        if (inVR && xrManager) {
+            // Update XR controller input
+            xrManager.update(this.deltaTime);
+            const xrInput = xrManager.getInputState();
+
+            // Debug: log XR input if there's any movement
+            if (xrInput.moveForward !== 0 || xrInput.moveRight !== 0) {
+                console.log('XR Input:', xrInput.moveForward, xrInput.moveRight);
+            }
+
+            // Get the VR camera's yaw rotation and update player yaw
+            // This makes movement relative to where the player is looking in VR
+            const xrCamera = xrManager.getXRCamera();
+            if (xrCamera) {
+                // Extract yaw from the XR camera's world quaternion
+                // The world includes the camera rig's rotation (from snap turning)
+                const euler = new THREE.Euler();
+                xrCamera.getWorldQuaternion(this._tempQuat || (this._tempQuat = new THREE.Quaternion()));
+                euler.setFromQuaternion(this._tempQuat, 'YXZ');
+
+                // Convert from radians to degrees
+                // In the rotated world (Y-up), yaw is rotation around Y axis
+                // But we need to map this back to Quake's yaw convention
+                // Quake yaw: 0 = +X, 90 = +Y (counter-clockwise from top)
+                // Three.js Y rotation: 0 = -Z, positive = counter-clockwise
+                // So: quakeYaw = -threeYaw * 180/PI + 90
+                const vrYawDegrees = -euler.y * 180 / Math.PI + 90;
+                this.player.angles.yaw = vrYawDegrees;
+            }
+
+            // Convert XR input to standard move input format
+            moveInput = {
+                forward: xrInput.moveForward,
+                right: xrInput.moveRight,
+                jump: xrInput.jump,
+                attack: xrInput.firePressed,
+                use: false
+            };
+
+            // Handle snap turning
+            if (xrInput.turn !== 0) {
+                this.renderer.applySnapTurn(xrInput.turn);
+                // Player yaw is now updated from VR camera, so no need to adjust here
+            }
+        } else {
+            // Standard keyboard/mouse input
+            moveInput = this.input.getMoveInput();
+
+            // Mouse look
+            const mouseDelta = this.input.getMouseDelta();
+            this.player.angles.yaw -= mouseDelta.x;
+            this.player.angles.pitch += mouseDelta.y;
+
+            // Clamp pitch
+            this.player.angles.pitch = Math.max(-89, Math.min(89, this.player.angles.pitch));
+        }
+
         this.player.input = moveInput;
 
-        // Mouse look
-        const mouseDelta = this.input.getMouseDelta();
-        this.player.angles.yaw -= mouseDelta.x;
-        this.player.angles.pitch += mouseDelta.y;
-
-        // Clamp pitch
-        this.player.angles.pitch = Math.max(-89, Math.min(89, this.player.angles.pitch));
-
-        // Weapon selection
-        const weaponSelect = this.input.getWeaponSelect();
-        if (weaponSelect > 0) {
-            playerSelectWeapon(this.player, weaponSelect, this);
+        // Weapon selection (only in non-VR for now)
+        if (!inVR) {
+            const weaponSelect = this.input.getWeaponSelect();
+            if (weaponSelect > 0) {
+                playerSelectWeapon(this.player, weaponSelect, this);
+            }
         }
 
         // Attack
@@ -503,13 +579,23 @@ export class Game {
     render() {
         if (!this.renderer || !this.player) return;
 
-        // Update camera from player (strafe roll and view bob are calculated in Renderer)
-        this.renderer.updateCamera(this.player.position, this.player.angles, this.player.velocity, {
-            viewHeight: this.player.viewHeight || 22,
-            onGround: this.player.onGround,
-            time: this.time,
-            deltaTime: this.deltaTime
-        });
+        // Check if we're in VR mode
+        const inVR = this.renderer.isInVR();
+
+        if (inVR) {
+            // In VR mode, Three.js WebXR manages the camera via the XR rig
+            // We just need to update the rig position and let WebXR handle head tracking
+            this.renderer.updateXRPosition(this.player.position);
+        } else {
+            // Standard desktop mode - update camera from player
+            // (strafe roll and view bob are calculated in Renderer)
+            this.renderer.updateCamera(this.player.position, this.player.angles, this.player.velocity, {
+                viewHeight: this.player.viewHeight || 22,
+                onGround: this.player.onGround,
+                time: this.time,
+                deltaTime: this.deltaTime
+            });
+        }
 
         // Update audio listener
         this.updateAudioListener();

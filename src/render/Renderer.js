@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { BSPRenderer } from './BSPRenderer.js';
 import { AliasRenderer } from './AliasRenderer.js';
 import { SkyRenderer } from './SkyRenderer.js';
@@ -8,6 +9,7 @@ import { LightStyles } from './LightStyles.js';
 import { ViewEffects } from './ViewEffects.js';
 import { SpriteRenderer } from './SpriteRenderer.js';
 import { updateDynamicLights, MAX_DLIGHTS } from './LightmapMaterial.js';
+import { XRManager } from '../input/XRManager.js';
 
 /**
  * Renderer - Main Three.js scene management
@@ -21,6 +23,12 @@ export class Renderer {
         // Three.js setup
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x1a0a00);
+
+        // World container - holds all level geometry
+        // This can be rotated to convert coordinate systems for VR
+        this.worldContainer = new THREE.Group();
+        this.worldContainer.name = 'worldContainer';
+        this.scene.add(this.worldContainer);
 
         // Camera (Quake FOV is typically 90)
         this.camera = new THREE.PerspectiveCamera(90, this.width / this.height, 1, 8192);
@@ -164,7 +172,9 @@ export class Renderer {
         // Create BSP renderer
         this.bspRenderer = new BSPRenderer(bsp, pak);
         const levelMesh = this.bspRenderer.createMesh();
-        this.scene.add(levelMesh);
+        // Add to world container instead of scene directly
+        // This allows us to rotate the world for VR coordinate conversion
+        this.worldContainer.add(levelMesh);
 
         // Hook up light styles to lightmap builder for dynamic updates
         if (this.bspRenderer.lightmapBuilder) {
@@ -178,7 +188,8 @@ export class Renderer {
         if (skyTexture) {
             this.skyRenderer = new SkyRenderer(bsp, pak, skyTexture);
             const skyMesh = this.skyRenderer.createMesh();
-            this.scene.add(skyMesh);
+            // Add to world container so it rotates with the level in VR
+            this.worldContainer.add(skyMesh);
         }
 
         // Create alias renderer for models
@@ -209,11 +220,31 @@ export class Renderer {
     }
 
     clearLevel() {
-        // Remove all objects from scene
-        while (this.scene.children.length > 0) {
-            const obj = this.scene.children[0];
-            this.scene.remove(obj);
+        // Clear world container contents (level geometry), but keep the container itself
+        while (this.worldContainer.children.length > 0) {
+            const obj = this.worldContainer.children[0];
+            this.worldContainer.remove(obj);
 
+            if (obj.geometry) obj.geometry.dispose();
+            if (obj.material) {
+                if (Array.isArray(obj.material)) {
+                    obj.material.forEach(m => m.dispose());
+                } else {
+                    obj.material.dispose();
+                }
+            }
+        }
+
+        // Remove other scene objects (but keep worldContainer and camera rig)
+        const toRemove = [];
+        for (const obj of this.scene.children) {
+            // Keep the world container and XR camera rig
+            if (obj === this.worldContainer) continue;
+            if (obj.name === 'xrCameraRig') continue;
+            toRemove.push(obj);
+        }
+        for (const obj of toRemove) {
+            this.scene.remove(obj);
             if (obj.geometry) obj.geometry.dispose();
             if (obj.material) {
                 if (Array.isArray(obj.material)) {
@@ -764,11 +795,16 @@ export class Renderer {
     }
 
     render() {
+        // In VR mode, Three.js handles the camera automatically
+        // We just need to make sure the scene renders properly
+        const inVR = this.isInVR();
+
         // Render main scene
         this.renderer.render(this.scene, this.camera);
 
         // Render weapon on top (clears depth, keeps color)
-        if (this.weaponRenderer) {
+        // Skip in VR mode for now - weapon needs special handling in VR
+        if (this.weaponRenderer && !inVR) {
             this.weaponRenderer.render(this.renderer);
         }
 
@@ -793,5 +829,143 @@ export class Renderer {
 
     getCanvas() {
         return this.renderer.domElement;
+    }
+
+    /**
+     * Initialize WebXR support
+     * @param {HTMLElement} container - Container for VR button
+     * @returns {XRManager} The XR manager instance
+     */
+    async initXR(container) {
+        this.xrManager = new XRManager(this.renderer, this.scene);
+        this.xrManager.init();
+
+        // Store reference to the camera for VR mode switching
+        this.xrManager.mainCamera = this.camera;
+
+        // Add camera rig to scene - this is crucial for positioning
+        const cameraRig = this.xrManager.getCameraRig();
+        this.scene.add(cameraRig);
+
+        // DON'T add camera to rig here - we'll do it when entering VR
+        // Adding it here breaks non-VR mode
+
+        // Set up session start handler to add camera to rig
+        const originalOnSessionStart = this.xrManager.onSessionStart;
+        const self = this;
+        this.xrManager.onSessionStart = () => {
+            console.log('=== VR SESSION STARTING (Renderer callback) ===');
+
+            // Rotate the world container to convert from Quake's Z-up to WebXR's Y-up
+            // Rotation by -90° around X makes Z-up appear as Y-up
+            // This means: world Y -> world Z, world Z -> world -Y
+            self.worldContainer.rotation.order = 'XYZ';
+            self.worldContainer.rotation.x = -Math.PI / 2;
+            console.log('World container rotated for VR:', self.worldContainer.rotation.x);
+
+            // Add camera to rig when entering VR
+            cameraRig.add(self.camera);
+            // Reset camera's local position for VR
+            self.camera.position.set(0, 0, 0);
+            self.camera.rotation.set(0, 0, 0);
+
+            console.log('Camera added to XR rig');
+            console.log('Rig children count:', cameraRig.children.length);
+
+            if (originalOnSessionStart) {
+                originalOnSessionStart();
+            }
+        };
+
+        // Set up session end handler to remove camera from rig
+        const originalOnSessionEnd = this.xrManager.onSessionEnd;
+        this.xrManager.onSessionEnd = () => {
+            // Remove camera from rig when exiting VR
+            cameraRig.remove(this.camera);
+            // Add camera back to scene
+            this.scene.add(this.camera);
+            console.log('Camera removed from XR rig');
+
+            // Reset world container rotation for non-VR mode
+            this.worldContainer.rotation.set(0, 0, 0);
+            console.log('World container rotation reset');
+
+            if (originalOnSessionEnd) {
+                originalOnSessionEnd();
+            }
+        };
+
+        // Check if offerSession is available (newer API)
+        // If so, we can use it for seamless VR entry via browser UI
+        const hasOfferSession = navigator.xr && typeof navigator.xr.offerSession === 'function';
+
+        if (hasOfferSession) {
+            console.log('WebXR offerSession available - using native browser VR entry');
+            try {
+                navigator.xr.offerSession('immersive-vr', {
+                    optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers']
+                }).then(session => {
+                    this.renderer.xr.setSession(session);
+                }).catch(err => {
+                    console.log('offerSession not activated:', err.message);
+                });
+            } catch (e) {
+                console.warn('offerSession failed:', e);
+            }
+        }
+
+        // Always create VR button as fallback / alternative entry point
+        const vrButton = VRButton.createButton(this.renderer);
+        vrButton.id = 'vr-button';
+        container.appendChild(vrButton);
+
+        return this.xrManager;
+    }
+
+    /**
+     * Check if currently in VR mode
+     */
+    isInVR() {
+        // Use Three.js's built-in check - more reliable than our flag
+        return this.renderer.xr.isPresenting;
+    }
+
+    /**
+     * Get the XR manager
+     */
+    getXRManager() {
+        return this.xrManager;
+    }
+
+    /**
+     * Update XR camera rig position to match player
+     * @param {Object} position - Player position {x, y, z}
+     */
+    updateXRPosition(position) {
+        if (this.xrManager && this.renderer.xr.isPresenting) {
+            // In VR, we position the camera rig at the player's feet
+            // The headset provides the head position relative to the rig
+            this.xrManager.setPosition(position.x, position.y, position.z);
+        }
+    }
+
+    /**
+     * Apply snap turn in VR
+     * @param {number} angleDegrees - Angle to turn in degrees
+     */
+    applySnapTurn(angleDegrees) {
+        if (this.xrManager && this.xrManager.isPresenting) {
+            const currentRotation = this.xrManager.getRotationY();
+            const newRotation = currentRotation - THREE.MathUtils.degToRad(angleDegrees);
+            this.xrManager.setRotationY(newRotation);
+        }
+    }
+
+    /**
+     * Set the animation loop for WebXR
+     * @param {Function} callback - The animation loop function
+     */
+    setAnimationLoop(callback) {
+        this.renderer.setAnimationLoop(callback);
     }
 }
