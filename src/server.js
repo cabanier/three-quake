@@ -2,7 +2,6 @@
 
 import { MAX_MODELS, MAX_SOUNDS, MAX_LIGHTSTYLES, MAX_DATAGRAM, MAX_MSGLEN, MAX_EDICTS } from './quakedef.js';
 import { sizebuf_t } from './common.js';
-import { cvar_t } from './cvar.js';
 
 //============================================================================
 // Server state enum
@@ -190,15 +189,12 @@ export const SPAWNFLAG_NOT_HARD = 1024;
 export const SPAWNFLAG_NOT_DEATHMATCH = 2048;
 
 //============================================================================
-// Extern cvars
+// Extern cvars - defined in host.js, re-exported here for compatibility
 //============================================================================
 
-export const teamplay = new cvar_t( 'teamplay', '0', false, true );
-export const skill = new cvar_t( 'skill', '1' );
-export const deathmatch = new cvar_t( 'deathmatch', '0' );
-export const coop = new cvar_t( 'coop', '0' );
-export const fraglimit = new cvar_t( 'fraglimit', '0', false, true );
-export const timelimit = new cvar_t( 'timelimit', '0', false, true );
+// Note: These are re-exported from host.js where they are defined and registered.
+// This matches original Quake where cvars were defined in host.c and extern'd in server.h.
+export { skill, deathmatch, coop, teamplay, fraglimit, timelimit } from './host.js';
 
 //============================================================================
 // Global server state

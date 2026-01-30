@@ -84,18 +84,18 @@ const host_speeds = new cvar_t( 'host_speeds', '0' ); // set for running times
 const sys_ticrate = new cvar_t( 'sys_ticrate', '0.05' );
 const serverprofile = new cvar_t( 'serverprofile', '0' );
 
-const fraglimit = new cvar_t( 'fraglimit', '0', false, true );
-const timelimit = new cvar_t( 'timelimit', '0', false, true );
-const teamplay = new cvar_t( 'teamplay', '0', false, true );
+export const fraglimit = new cvar_t( 'fraglimit', '0', false, true );
+export const timelimit = new cvar_t( 'timelimit', '0', false, true );
+export const teamplay = new cvar_t( 'teamplay', '0', false, true );
 
 const samelevel = new cvar_t( 'samelevel', '0' );
 const noexit = new cvar_t( 'noexit', '0', false, true );
 
 const developer = new cvar_t( 'developer', '0' );
 
-const skill = new cvar_t( 'skill', '1' ); // 0 - 3
-const deathmatch = new cvar_t( 'deathmatch', '0' ); // 0, 1, or 2
-const coop = new cvar_t( 'coop', '0' ); // 0 or 1
+export const skill = new cvar_t( 'skill', '1' ); // 0 - 3
+export const deathmatch = new cvar_t( 'deathmatch', '0' ); // 0, 1, or 2
+export const coop = new cvar_t( 'coop', '0' ); // 0 or 1
 
 const pausable = new cvar_t( 'pausable', '1' );
 
