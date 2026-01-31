@@ -22,6 +22,7 @@ export function WT_SetDirectMode(enabled: boolean): void {
 // Callback for map changes when joining rooms
 let _mapChangeCallback: ((mapName: string) => Promise<void>) | null = null;
 let _getCurrentMap: (() => string) | null = null;
+let _setMaxClients: ((maxClients: number) => void) | null = null;
 
 /**
  * Set callbacks for map management
@@ -32,6 +33,13 @@ export function WT_SetMapCallbacks(
 ): void {
 	_mapChangeCallback = changeMap;
 	_getCurrentMap = getCurrentMap;
+}
+
+/**
+ * Set callback for changing max clients
+ */
+export function WT_SetMaxClientsCallback(setMaxClients: (maxClients: number) => void): void {
+	_setMaxClients = setMaxClients;
 }
 
 // Connection tracking
@@ -529,6 +537,11 @@ async function _handleLobbyProtocol(
 						maxPlayers: 16,
 						hostName: 'Shared'
 					});
+					// Set maxclients for the auto-created room
+					if (_setMaxClients !== null && room !== null) {
+						Sys_Printf('Setting maxclients to %d for auto-created room %s\n', room.maxPlayers, roomId);
+						_setMaxClients(room.maxPlayers);
+					}
 				}
 
 				if (!room) {
@@ -590,11 +603,22 @@ async function _handleLobbyProtocol(
 
 					Sys_Printf('Client created room: ' + room.id + '\n');
 
+					// Set maxclients before loading the map (like original Quake's "maxplayers" command)
+					// This must be done before SV_SpawnServer so clients receive the correct value
+					if (_setMaxClients !== null) {
+						Sys_Printf('Setting maxclients to %d for room %s\n', room.maxPlayers, room.id);
+						_setMaxClients(room.maxPlayers);
+					}
+
 					// Load the map for this room (like original Quake's "map" command)
-					if (_mapChangeCallback != null && _getCurrentMap != null) {
+					if (_mapChangeCallback !== null && _getCurrentMap !== null) {
 						const currentMap = _getCurrentMap();
 						if (room.map !== currentMap) {
 							Sys_Printf('Loading map %s for new room %s\n', room.map, room.id);
+							await _mapChangeCallback(room.map);
+						} else {
+							// Same map but maxclients changed - need to respawn
+							Sys_Printf('Respawning map %s for new maxclients\n', room.map);
 							await _mapChangeCallback(room.map);
 						}
 					}

@@ -40,6 +40,7 @@ import {
 	WT_SetMapCallbacks,
 	WT_SetDirectMode,
 	WT_SetSocketFreer,
+	WT_SetMaxClientsCallback,
 } from './net_webtransport_server.ts';
 import { NET_NewQSocket, NET_FreeQSocket } from '../src/net_main.js';
 
@@ -214,6 +215,16 @@ async function Host_Init_Server() {
 		},
 		() => sv.name || ''
 	);
+
+	// Set up maxclients callback so rooms can set player limits
+	// This must be called before SV_SpawnServer so clients receive the correct value in svc_serverinfo
+	WT_SetMaxClientsCallback((maxClients) => {
+		// Clamp to valid range (like original MaxPlayers_f in net_main.c)
+		if (maxClients < 1) maxClients = 1;
+		if (maxClients > svs.maxclientslimit) maxClients = svs.maxclientslimit;
+		Sys_Printf('Updating maxclients: %d -> %d\n', svs.maxclients, maxClients);
+		svs.maxclients = maxClients;
+	});
 
 	// Spawn the default map
 	Sys_Printf('Spawning server for map: ' + CONFIG.defaultMap + '\n');
